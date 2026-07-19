@@ -222,6 +222,7 @@ BLOCKLIST = {
     "facebook", "google", "youtube", "twitter", "instagram", "tiktok",
     "amazon", "netflix", "spotify", "iphone", "android",
     "jesus", "christ", "allah", "bible", "quran",
+    "boobs", "bitches", "seahawks", "matthews", "sims",
 }
 
 LOANWORDS_OK = {
@@ -617,6 +618,20 @@ def polish_plural_from_singular(singular: str) -> str | None:
         "stół": "stoły",
         "koń": "konie",
         "dzień": "dni",
+        "błąd": "błędy",
+        "sektor": "sektory",
+        "aktor": "aktorzy",
+        "doktor": "doktorzy",
+        "lekarz": "lekarze",
+        "nauczyciel": "nauczyciele",
+        "gracz": "gracze",
+        "członek": "członkowie",
+        "użytkownik": "użytkownicy",
+        "turysta": "turyści",
+        "komputer": "komputery",
+        "kolor": "kolory",
+        "czynnik": "czynniki",
+        "ksiądz": "księża",
     }
     if s in irregular:
         return irregular[s]
@@ -624,17 +639,85 @@ def polish_plural_from_singular(singular: str) -> str | None:
         return s[:-2] + "ki"
     if s.endswith("ga"):
         return s[:-2] + "gi"
+    if s.endswith(("cja", "sia", "zia", "nia")):
+        return s[:-1] + "e"  # publikacja -> publikacje
+    if s.endswith("ść"):
+        return s[:-1] + "ci"  # własność -> własności (approx)
     if s.endswith("a"):
         return s[:-1] + "y"
     if s.endswith("ek"):
         return s[:-2] + "ki"
     if s.endswith("ec"):
         return s[:-2] + "ce"
+    if s.endswith(("nik", "czyk", "czek")):
+        return s + "i"  # użytkownik handled above; czynnik -> czynniki
+    if s.endswith("k"):
+        return s + "i"
+    if s.endswith("g"):
+        return s + "i"
+    if s.endswith(("arz", "erz")):
+        return s + "e"  # lekarz -> lekarze
+    if s.endswith(("ciel", "ciel")):
+        return s + "e"
+    if s.endswith(("tor", "dor", "sor")) and not s.endswith("sektor"):
+        # personal -or nouns: aktor -> aktorzy, but sektor is non-personal
+        if s in {"sektor", "motor", "faktor", "traktor", "sektor"}:
+            return s + "y"
+        return s[:-1] + "rzy" if not s.endswith("ktor") else s + "zy"
+    if s.endswith("ktor"):
+        return s + "y"  # sektor/detektor non-personal default
     if s.endswith(("ć", "ś", "ź", "ń", "j", "l")):
         return s + "e"
-    if re.search(r"[bdfghklmnprstwz]$", s) or s.endswith("ch"):
+    if re.search(r"[bdfhlmnprstwz]$", s) or s.endswith("ch"):
         return s + "y"
     return None
+
+
+# High-confidence plural/singular glosses where MT/heuristics are unreliable.
+MANUAL_FORMS: dict[str, str] = {
+    "sector": "sektor",
+    "sectors": "sektory",
+    "doctor": "lekarz",
+    "doctors": "lekarze",
+    "actor": "aktor",
+    "actors": "aktorzy",
+    "factor": "czynnik",
+    "factors": "czynniki",
+    "error": "błąd",
+    "errors": "błędy",
+    "member": "członek",
+    "members": "członkowie",
+    "player": "gracz",
+    "players": "gracze",
+    "user": "użytkownik",
+    "users": "użytkownicy",
+    "teacher": "nauczyciel",
+    "teachers": "nauczyciele",
+    "computer": "komputer",
+    "computers": "komputery",
+    "color": "kolor",
+    "colors": "kolory",
+    "colour": "kolor",
+    "colours": "kolory",
+    "city": "miasto",
+    "cities": "miasta",
+    "property": "właściwość / nieruchomość",
+    "properties": "właściwości / nieruchomości",
+    "publication": "publikacja",
+    "publications": "publikacje",
+    "tourist": "turysta",
+    "tourists": "turyści",
+    "choice": "wybór",
+    "choices": "wybory",
+    "girl": "dziewczyna",
+    "girls": "dziewczyny",
+    "department": "dział / departament",
+    "departments": "działy / departamenty",
+    "priest": "ksiądz",
+    "priests": "księża",
+    "delay": "opóźnienie",
+    "delays": "opóźnienia",
+}
 
 
 def normalize_ascii_fold(text: str) -> str:
@@ -690,31 +773,34 @@ def morph_lookup(word: str, mapping: dict[str, str]) -> str | None:
 def translate_word(en: str, freedict: dict[str, str], cache: dict[str, str]) -> str | None:
     if en in cache:
         return cache[en]
+    if en in MANUAL_FORMS:
+        cache[en] = MANUAL_FORMS[en]
+        return cache[en]
     if en in MANUAL:
         cache[en] = MANUAL[en]
         return cache[en]
 
+    # Plurals: translate the exact surface form with Argos first — never invent with +y.
     if is_probable_english_plural(en):
         singular = english_singular(en)
-        if singular:
-            sing_pl = translate_word(singular, freedict, cache)
-            if sing_pl:
-                base = clean_polish(sing_pl.split("/")[0])
-                plural = polish_plural_from_singular(base)
-                if plural and plural != base:
-                    cache[en] = plural
+        arg = translate_argos(en)
+        sing_pl = translate_word(singular, freedict, cache) if singular else None
+        sing_base = clean_polish(sing_pl.split("/")[0]) if sing_pl else None
+
+        if arg and not is_useless_identity(en, arg):
+            arg_base = clean_polish(arg)
+            if not sing_base or normalize_ascii_fold(arg_base) != normalize_ascii_fold(sing_base):
+                # Reject glued heuristic garbage like nosiće / budowaće
+                if not (sing_base and arg_base == sing_base + "e"):
+                    cache[en] = arg_base
                     return cache[en]
-            arg = translate_argos(en)
-            if arg and not is_useless_identity(en, arg):
-                if singular:
-                    sing_pl2 = cache.get(singular)
-                    if sing_pl2 and clean_polish(arg) == clean_polish(sing_pl2.split("/")[0]):
-                        forced = polish_plural_from_singular(clean_polish(sing_pl2.split("/")[0]))
-                        if forced:
-                            cache[en] = forced
-                            return cache[en]
-                cache[en] = arg
+
+        if sing_base:
+            plural = polish_plural_from_singular(sing_base)
+            if plural and plural != sing_base:
+                cache[en] = plural
                 return cache[en]
+        return None
 
     if en in freedict:
         pl = clean_polish(freedict[en])
@@ -726,16 +812,8 @@ def translate_word(en: str, freedict: dict[str, str], cache: dict[str, str]) -> 
     if hit:
         pl = clean_polish(hit)
         if pl and not is_useless_identity(en, pl):
-            if not (is_probable_english_plural(en) and polish_plural_from_singular(pl) and pl == clean_polish(hit)):
-                # If this is plural and morph returned singular gloss, pluralize it
-                if is_probable_english_plural(en):
-                    forced = polish_plural_from_singular(pl)
-                    if forced and forced != pl:
-                        cache[en] = forced
-                        return cache[en]
-                else:
-                    cache[en] = pl
-                    return cache[en]
+            cache[en] = pl
+            return cache[en]
 
     arg = translate_argos(en)
     if arg and not is_useless_identity(en, arg):

@@ -52,6 +52,22 @@ class VocabSnapTests(TestCase):
             "dogs": "psy",
             "book": "książka",
             "books": "książki",
+            "sector": "sektor",
+            "sectors": "sektory",
+            "doctor": "lekarz",
+            "doctors": "lekarze",
+            "error": "błąd",
+            "errors": "błędy",
+            "user": "użytkownik",
+            "users": "użytkownicy",
+            "actor": "aktor",
+            "actors": "aktorzy",
+            "factor": "czynnik",
+            "factors": "czynniki",
+            "member": "członek",
+            "members": "członkowie",
+            "player": "gracz",
+            "players": "gracze",
         }
         for en, pl in cases.items():
             self.assertIn(en, self.by_en)
