@@ -1,0 +1,147 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="theme-color" content="#0b1c17">
+  <title>Vocab Snap Trainer</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="{% static 'vocab/snap.css' %}">
+</head>
+<body>
+  <div class="atmosphere" aria-hidden="true"></div>
+
+  <main id="app" class="app">
+    <!-- SETUP -->
+    <section id="screen-setup" class="screen screen-setup">
+      <header class="brand-block">
+        <p class="brand">Vocab Snap</p>
+        <h1>Rapid Mode</h1>
+        <p class="lede">See a word. Snap the meaning. {{ word_count|default:"10000" }} everyday English words ↔ Polish.</p>
+      </header>
+
+      <div class="setup-panel">
+        <fieldset class="mode-field">
+          <legend>Session mode</legend>
+          <label class="choice">
+            <input type="radio" name="mode" value="endless" checked>
+            <span>
+              <strong>Endless</strong>
+              <small>Keep going until you quit. Chase your high streak.</small>
+            </span>
+          </label>
+          <label class="choice">
+            <input type="radio" name="mode" value="fixed">
+            <span>
+              <strong>Fixed rounds</strong>
+              <small>Pick how many words, then finish the set.</small>
+            </span>
+          </label>
+        </fieldset>
+
+        <div id="fixed-controls" class="fixed-controls is-hidden">
+          <div class="presets" role="group" aria-label="Round presets">
+            <button type="button" class="preset" data-rounds="20">20</button>
+            <button type="button" class="preset" data-rounds="50">50</button>
+            <button type="button" class="preset active" data-rounds="100">100</button>
+            <button type="button" class="preset" data-rounds="200">200</button>
+          </div>
+          <label class="custom-rounds">
+            <span>Or enter any number</span>
+            <input id="rounds-input" type="number" min="1" max="10000" value="100" inputmode="numeric">
+          </label>
+        </div>
+
+        <div class="stats-glance" id="highscore-glance">
+          <div>
+            <span class="label">Best streak</span>
+            <strong id="best-streak">0</strong>
+          </div>
+          <div>
+            <span class="label">Best endless score</span>
+            <strong id="best-score">0</strong>
+          </div>
+        </div>
+
+        <button type="button" id="btn-start" class="cta primary">Start snapping</button>
+        <p id="load-status" class="load-status">Loading word bank…</p>
+      </div>
+    </section>
+
+    <!-- PLAY -->
+    <section id="screen-play" class="screen screen-play is-hidden" aria-live="polite">
+      <header class="hud">
+        <div class="hud-item">
+          <span class="label">Streak</span>
+          <strong id="hud-streak">0</strong>
+        </div>
+        <div class="hud-item">
+          <span class="label">Score</span>
+          <strong id="hud-score">0</strong>
+        </div>
+        <div class="hud-item" id="hud-progress-wrap">
+          <span class="label">Round</span>
+          <strong id="hud-progress">—</strong>
+        </div>
+        <button type="button" id="btn-quit" class="quit">Quit</button>
+      </header>
+
+      <div class="timer-track" aria-hidden="true">
+        <div id="timer-bar" class="timer-bar"></div>
+      </div>
+
+      <div class="prompt-stage">
+        <p id="direction-hint" class="direction-hint">EN → PL</p>
+        <p id="prompt-word" class="prompt-word">—</p>
+        <p id="feedback" class="feedback" aria-live="assertive"></p>
+      </div>
+
+      <div id="choices" class="choices" role="group" aria-label="Answer choices"></div>
+    </section>
+
+    <!-- RESULTS -->
+    <section id="screen-results" class="screen screen-results is-hidden">
+      <header class="brand-block compact">
+        <p class="brand">Vocab Snap</p>
+        <h1 id="results-title">Session over</h1>
+      </header>
+      <div class="results-grid">
+        <div>
+          <span class="label">Score</span>
+          <strong id="res-score">0</strong>
+        </div>
+        <div>
+          <span class="label">Best streak</span>
+          <strong id="res-streak">0</strong>
+        </div>
+        <div>
+          <span class="label">Correct</span>
+          <strong id="res-correct">0</strong>
+        </div>
+        <div>
+          <span class="label">Missed</span>
+          <strong id="res-missed">0</strong>
+        </div>
+      </div>
+      <p id="res-note" class="res-note"></p>
+      <div class="cta-row">
+        <button type="button" id="btn-again" class="cta primary">Play again</button>
+        <button type="button" id="btn-home" class="cta ghost">Change mode</button>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    window.VOCAB_SNAP = {
+      wordsUrl: "{% url 'vocab_words' %}",
+      storageKey: "vocabSnap.v1"
+    };
+  </script>
+  <script src="{% static 'vocab/snap.js' %}"></script>
+</body>
+</html>
