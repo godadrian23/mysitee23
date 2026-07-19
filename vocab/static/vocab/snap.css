@@ -342,7 +342,7 @@ body {
 }
 
 .timer-bar.running {
-  animation: drain var(--snap-ms, 1000ms) linear forwards;
+  animation: drain var(--snap-ms, 2000ms) linear forwards;
 }
 
 .timer-bar.freeze {

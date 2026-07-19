@@ -22,7 +22,7 @@ Gameplay
 --------
 - Prompt word centered at the top (randomly English or Polish)
 - 8 related multiple-choice answers
-- Hard 1-second timer — miss if you don't tap in time
+- Hard 2-second timer — miss if you don't tap in time
 - Modes: Endless (chase high streak/score) and Fixed rounds (presets or any N)
 - Progress stored in browser localStorage (guest-friendly for iPhone)
 

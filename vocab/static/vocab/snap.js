@@ -1,5 +1,5 @@
 (() => {
-  const SNAP_MS = 1000;
+  const SNAP_MS = 2000;
   const CHOICE_COUNT = 8;
   const FEEDBACK_MS = 650;
   const STORAGE_KEY = window.VOCAB_SNAP.storageKey;
