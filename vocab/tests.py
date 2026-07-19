@@ -1,11 +1,16 @@
-from django.test import Client, TestCase
-from django.urls import reverse
 import json
 from pathlib import Path
+
+from django.test import Client, TestCase
+from django.urls import reverse
+
 
 class VocabSnapTests(TestCase):
     def setUp(self):
         self.client = Client()
+        path = Path(__file__).resolve().parent / "data" / "words.json"
+        self.data = json.loads(path.read_text(encoding="utf-8"))
+        self.by_en = {w["en"]: w for w in self.data["words"]}
 
     def test_home_renders(self):
         response = self.client.get(reverse("vocab_home"))
@@ -27,10 +32,27 @@ class VocabSnapTests(TestCase):
         self.assertIn("bucket", sample)
 
     def test_buckets_large_enough_for_eight_choices(self):
-        path = Path(__file__).resolve().parent / "data" / "words.json"
-        data = json.loads(path.read_text(encoding="utf-8"))
         counts = {}
-        for word in data["words"]:
+        for word in self.data["words"]:
             counts[word["bucket"]] = counts.get(word["bucket"], 0) + 1
         self.assertTrue(counts)
         self.assertGreaterEqual(min(counts.values()), 8)
+
+    def test_person_names_excluded(self):
+        for name in ("thomas", "john", "michael", "jennifer"):
+            self.assertNotIn(name, self.by_en)
+
+    def test_plural_number_agreement(self):
+        cases = {
+            "duck": "kaczka",
+            "ducks": "kaczki",
+            "cat": "kot",
+            "cats": "koty",
+            "dog": "pies",
+            "dogs": "psy",
+            "book": "książka",
+            "books": "książki",
+        }
+        for en, pl in cases.items():
+            self.assertIn(en, self.by_en)
+            self.assertEqual(self.by_en[en]["pl"].split(" / ")[0], pl)
