@@ -1,0 +1,8 @@
+my-venv/
+__pycache__/
+*.py[cod]
+*.sqlite3
+staticfiles/
+.DS_Store
+*.egg-info/
+.pytest_cache/

@@ -1,0 +1,6 @@
+# Vocabulary dataset attribution
+#
+# Frequency ranking: wordfreq (top English word lists)
+# Primary translations: FreeDict English–Polish (Piotrowski+Saloni),
+#   GNU GPL / GFDL — https://freedict.org/
+# Fallback translations: Argos Translate (LibreTranslate/Argos models)
