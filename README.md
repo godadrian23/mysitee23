@@ -22,7 +22,7 @@ Gameplay
 --------
 - Prompt word centered at the top (randomly English or Polish)
 - 8 related multiple-choice answers
-- Hard 2-second timer — miss if you don't tap in time
+- Hard 3-second timer — miss if you don't tap in time
 - Modes: Endless (chase high streak/score) and Fixed rounds (presets or any N)
 - Progress stored in browser localStorage (guest-friendly for iPhone)
 
@@ -31,9 +31,12 @@ Dataset
 ``vocab/data/words.json`` — top 10,000 everyday English words with Polish
 translations and hidden semantic buckets for related distractors.
 
+Filtered for quality: person names removed, slang/URL junk dropped, and
+English/Polish number agreement enforced (e.g. duck→kaczka, ducks→kaczki).
+
 Rebuild with::
 
     python scripts/build_word_dataset.py
 
-(Requires FreeDict TEI files under ``/tmp/enpl-tei`` and Argos EN→PL model.)
+(Requires FreeDict TEI files under ``/tmp/enpl-tei``, Argos EN→PL model, and NLTK names.)
 """

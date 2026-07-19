@@ -1,5 +1,12 @@
 #!/usr/bin/env python3
-"""Build a top-10k English ↔ Polish vocabulary dataset with semantic buckets."""
+"""Build a clean top-10k English ↔ Polish vocabulary dataset.
+
+Quality rules:
+- Drop person names (Thomas, John, …) and junk tokens (http, lol, …)
+- Prefer dictionary glosses; fall back to Argos for the exact surface form
+- Keep English/Polish number agreement (duck↔kaczka, ducks↔kaczki)
+- Reject useless identity pairs unless the word is a known loanword
+"""
 
 from __future__ import annotations
 
@@ -11,11 +18,15 @@ from pathlib import Path
 
 from wordfreq import top_n_list
 
+try:
+    from nltk.corpus import names as nltk_names
+except ImportError:  # pragma: no cover
+    nltk_names = None
+
 NS = {"tei": "http://www.tei-c.org/ns/1.0"}
 LETTERS_DIR = Path("/tmp/enpl-tei/eng-pol/letters")
 OUT_PATH = Path(__file__).resolve().parent.parent / "vocab" / "data" / "words.json"
 
-# Hidden semantic buckets used only for related distractors (not shown in UI).
 BUCKET_SEEDS: dict[str, list[str]] = {
     "technology": [
         "computer", "laptop", "keyboard", "mouse", "screen", "phone", "tablet",
@@ -59,7 +70,7 @@ BUCKET_SEEDS: dict[str, list[str]] = {
     ],
     "home": [
         "home", "house", "apartment", "room", "kitchen", "bedroom", "bathroom",
-        "living", "door", "window", "wall", "floor", "ceiling", "roof", "garden",
+        "door", "window", "wall", "floor", "ceiling", "roof", "garden",
         "furniture", "table", "chair", "sofa", "bed", "lamp", "mirror", "closet",
         "shelf", "carpet", "curtain", "key", "lock", "clean", "dirty", "wash",
         "laundry", "dishwasher", "fridge", "oven", "microwave", "vacuum",
@@ -95,10 +106,10 @@ BUCKET_SEEDS: dict[str, list[str]] = {
         "feather", "fur", "paw", "claw", "nest", "egg",
     ],
     "clothing": [
-        "clothes", "shirt", "tshirt", "pants", "trousers", "jeans", "dress",
-        "skirt", "jacket", "coat", "sweater", "hoodie", "socks", "shoes",
-        "boots", "sneakers", "hat", "cap", "scarf", "gloves", "belt", "tie",
-        "suit", "underwear", "pajamas", "pocket", "button", "zipper", "fashion",
+        "clothes", "shirt", "pants", "trousers", "jeans", "dress", "skirt",
+        "jacket", "coat", "sweater", "hoodie", "socks", "shoes", "boots",
+        "sneakers", "hat", "cap", "scarf", "gloves", "belt", "tie", "suit",
+        "underwear", "pajamas", "pocket", "button", "zipper", "fashion",
         "wear", "outfit", "uniform", "costume", "bag", "purse", "wallet",
     ],
     "sports": [
@@ -137,7 +148,7 @@ BUCKET_SEEDS: dict[str, list[str]] = {
     "city_life": [
         "city", "town", "village", "street", "road", "building", "shop", "store",
         "mall", "market", "park", "square", "bridge", "traffic", "crowd",
-        "people", "police", "fire", "ambulance", "hospital", "museum", "theater",
+        "people", "police", "ambulance", "hospital", "museum", "theater",
         "cinema", "cafe", "restaurant", "bar", "club", "library", "church",
         "mosque", "temple", "station", "subway", "metro", "bus", "taxi",
     ],
@@ -179,19 +190,320 @@ BUCKET_SEEDS: dict[str, list[str]] = {
     ],
 }
 
+NAME_ALLOWLIST = {
+    "may", "will", "june", "july", "august", "mark", "art", "grace", "hope",
+    "joy", "bill", "bob", "jack", "robin", "chase", "grant", "clay", "stone",
+    "page", "lake", "forest", "summer", "winter", "spring", "autumn", "fall",
+    "dawn", "holly", "ivy", "rose", "violet", "olive", "ginger", "cherry",
+    "amber", "crystal", "jade", "pearl", "ruby", "coral", "heath", "brook",
+    "cliff", "dale", "glen", "vale", "reed", "ash", "bay", "dean", "earl",
+    "king", "queen", "prince", "duke", "baron", "major", "general", "doctor",
+    "nurse", "teacher", "student", "mother", "father", "brother", "sister",
+    "cousin", "uncle", "aunt", "son", "daughter", "baby", "child", "man",
+    "woman", "boy", "girl", "people", "person", "human", "young", "green",
+    "cook", "long", "wood", "bell", "hill", "brown", "white", "black", "gray",
+    "grey", "blue", "gold", "silver", "frank", "pat", "chris", "jordan", "taylor",
+    "morgan", "casey", "kelly", "bailey", "harper", "carter", "parker", "hunter",
+}
+
+BLOCKLIST = {
+    "http", "https", "www", "html", "com", "org", "net", "edu", "gov",
+    "lol", "omg", "btw", "imo", "idk", "tbh", "smh", "nvm", "fyi", "asap",
+    "wanna", "gonna", "gotta", "kinda", "sorta", "dunno", "lemme", "gimme",
+    "u", "ur", "r", "ya", "yall", "ain", "dont", "didnt", "cant", "wont",
+    "isnt", "wasnt", "arent", "havent", "hasnt", "wouldnt", "couldnt",
+    "shouldnt", "im", "ive", "youre", "theyre", "hes", "shes", "thats",
+    "whats", "wheres", "theres", "heres", "lets", "whos",
+    "ii", "iii", "iv", "vi", "vii", "viii", "ix", "xi", "xii", "xx", "xxx",
+    "mr", "mrs", "ms", "dr", "jr", "sr", "st", "rd", "ave",
+    "vs", "etc", "eg", "ie", "nb", "ps", "fwd",
+    "de", "la", "el", "le", "des", "del", "van", "von", "da", "di", "du",
+    "san", "santa", "los", "las", "rio", "porto",
+    "facebook", "google", "youtube", "twitter", "instagram", "tiktok",
+    "amazon", "netflix", "spotify", "iphone", "android",
+    "jesus", "christ", "allah", "bible", "quran",
+}
+
+LOANWORDS_OK = {
+    "system", "video", "problem", "plan", "program", "film", "bank", "park",
+    "model", "internet", "hotel", "radio", "taxi", "bus", "sport", "golf",
+    "tennis", "album", "status", "partner", "metal", "marketing", "manager",
+    "business", "student", "region", "weekend", "bar", "plus", "menu", "salad",
+    "pizza", "burger", "jeans", "blog", "media", "forum", "test", "start",
+    "stop", "normal", "ideal", "total", "final", "original", "personal",
+    "social", "global", "digital", "manual", "automatic", "public", "private",
+    "legal", "formal", "standard", "premium", "online", "laptop", "tablet",
+    "robot", "wifi", "email", "app", "club", "pub", "cent", "dollar", "euro",
+    "hobby", "picnic", "camping", "parking", "meeting", "briefing", "set",
+    "box", "top", "ok", "okay",
+}
+
+MANUAL: dict[str, str] = {
+    "the": "ten / ta / to",
+    "a": "jakiś",
+    "an": "jakiś",
+    "to": "do",
+    "and": "i",
+    "of": "z",
+    "in": "w",
+    "is": "jest",
+    "for": "dla",
+    "that": "że / tamten",
+    "you": "ty / wy",
+    "it": "to / ono",
+    "on": "na",
+    "with": "z",
+    "this": "to / ten",
+    "was": "był",
+    "be": "być",
+    "as": "jako / jak",
+    "are": "są",
+    "have": "mieć",
+    "or": "lub / albo",
+    "at": "przy / u",
+    "from": "od / z",
+    "by": "przez / koło",
+    "not": "nie",
+    "your": "twój / wasz",
+    "all": "wszystko / wszyscy",
+    "can": "móc / potrafić",
+    "will": "będzie / wola",
+    "just": "właśnie / tylko",
+    "but": "ale",
+    "what": "co",
+    "when": "kiedy",
+    "who": "kto",
+    "which": "który",
+    "their": "ich",
+    "there": "tam",
+    "here": "tutaj",
+    "they": "oni / one",
+    "we": "my",
+    "he": "on",
+    "she": "ona",
+    "his": "jego",
+    "her": "jej",
+    "my": "mój",
+    "me": "mnie / mi",
+    "him": "jego / niego",
+    "us": "nas / nam",
+    "them": "ich / nich",
+    "our": "nasz",
+    "if": "jeśli",
+    "so": "więc / tak",
+    "than": "niż",
+    "then": "potem / wtedy",
+    "also": "także",
+    "more": "więcej",
+    "most": "najbardziej / większość",
+    "some": "kilka / trochę",
+    "any": "jakikolwiek / żaden",
+    "no": "nie / żaden",
+    "yes": "tak",
+    "do": "robić",
+    "does": "robi",
+    "did": "zrobił",
+    "done": "zrobione",
+    "has": "ma",
+    "had": "miał",
+    "would": "by",
+    "could": "mógłby",
+    "should": "powinien",
+    "may": "może / maj",
+    "might": "mógłby",
+    "must": "musić",
+    "about": "o / około",
+    "into": "do",
+    "over": "nad / przez",
+    "after": "po",
+    "before": "przed",
+    "between": "między",
+    "under": "pod",
+    "again": "znowu",
+    "because": "ponieważ",
+    "through": "przez",
+    "during": "podczas",
+    "without": "bez",
+    "against": "przeciw",
+    "among": "wśród",
+    "across": "przez / w poprzek",
+    "up": "w górę",
+    "out": "na zewnątrz",
+    "how": "jak",
+    "where": "gdzie",
+    "why": "dlaczego",
+    "now": "teraz",
+    "only": "tylko",
+    "very": "bardzo",
+    "even": "nawet",
+    "back": "plecy / z powrotem",
+    "good": "dobry",
+    "new": "nowy",
+    "first": "pierwszy",
+    "last": "ostatni",
+    "long": "długi",
+    "great": "świetny / wielki",
+    "little": "mały / trochę",
+    "own": "własny",
+    "other": "inny",
+    "old": "stary",
+    "right": "prawy / prawo / racja",
+    "big": "duży",
+    "high": "wysoki",
+    "different": "inny / różny",
+    "small": "mały",
+    "large": "duży",
+    "next": "następny",
+    "early": "wczesny / wcześnie",
+    "young": "młody",
+    "important": "ważny",
+    "few": "kilka",
+    "public": "publiczny",
+    "bad": "zły",
+    "same": "ten sam",
+    "able": "zdolny",
+    "duck": "kaczka",
+    "ducks": "kaczki",
+    "dog": "pies",
+    "dogs": "psy",
+    "cat": "kot",
+    "cats": "koty",
+    "book": "książka",
+    "books": "książki",
+    "child": "dziecko",
+    "children": "dzieci",
+    "man": "mężczyzna",
+    "men": "mężczyźni",
+    "woman": "kobieta",
+    "women": "kobiety",
+    "mouse": "mysz",
+    "mice": "myszy",
+    "foot": "stopa",
+    "feet": "stopy",
+    "tooth": "ząb",
+    "teeth": "zęby",
+    "person": "osoba",
+    "people": "ludzie",
+    "leaf": "liść",
+    "leaves": "liście",
+    "life": "życie",
+    "lives": "życia / żyje",
+    "knife": "nóż",
+    "knives": "noże",
+    "wife": "żona",
+    "wives": "żony",
+    "take": "brać / wziąć",
+    "takes": "bierze",
+    "took": "wziął",
+    "taken": "wzięty",
+    "put": "kłaść / położyć",
+    "puts": "kładzie",
+    "am": "jestem",
+    "get": "dostać / brać",
+    "gets": "dostaje",
+    "got": "dostał",
+    "make": "robić / tworzyć",
+    "makes": "robi",
+    "made": "zrobiony",
+    "go": "iść / jechać",
+    "goes": "idzie",
+    "went": "poszedł",
+    "gone": "poszedł",
+    "come": "przychodzić",
+    "comes": "przychodzi",
+    "came": "przyszedł",
+    "see": "widzieć",
+    "sees": "widzi",
+    "saw": "piła / widział",
+    "seen": "widziany",
+    "know": "wiedzieć / znać",
+    "knows": "wie",
+    "knew": "wiedział",
+    "known": "znany",
+    "think": "myśleć",
+    "thinks": "myśli",
+    "thought": "myśl / myślał",
+    "say": "mówić / powiedzieć",
+    "says": "mówi",
+    "said": "powiedział",
+    "tell": "mówić / opowiadać",
+    "tells": "mówi",
+    "told": "powiedział",
+    "give": "dawać / dać",
+    "gives": "daje",
+    "gave": "dał",
+    "given": "dany",
+    "find": "znaleźć",
+    "finds": "znajduje",
+    "found": "znaleziony",
+    "use": "używać",
+    "uses": "używa",
+    "used": "używany",
+    "want": "chcieć",
+    "wants": "chce",
+    "wanted": "chciał",
+    "need": "potrzebować",
+    "needs": "potrzebuje",
+    "needed": "potrzebny",
+    "create": "tworzyć",
+    "creates": "tworzy",
+    "created": "stworzony",
+    "post": "poczta / wpis",
+    "bit": "odrobina / bit",
+    "fine": "w porządku / grzywna",
+    "rock": "skała / rock",
+    "spot": "miejsce / plama",
+    "house": "dom",
+    "home": "dom",
+    "love": "miłość / kochać",
+    "ok": "w porządku",
+    "okay": "w porządku",
+}
+
+IRREGULAR_SINGULAR = {
+    "children": "child",
+    "men": "man",
+    "women": "woman",
+    "people": "person",
+    "mice": "mouse",
+    "feet": "foot",
+    "teeth": "tooth",
+    "geese": "goose",
+    "leaves": "leaf",
+    "knives": "knife",
+    "wives": "wife",
+    "lives": "life",
+    "selves": "self",
+    "thieves": "thief",
+}
+
+
+def clean_polish(text: str) -> str:
+    text = (text or "").strip()
+    text = re.sub(r"\s+", " ", text)
+    text = text.split(";")[0].strip()
+    if " / " in text:
+        text = text.split(" / ")[0].strip()
+    elif "/" in text and " " not in text.split("/")[0]:
+        text = text.split("/")[0].strip()
+    text = text.split(",")[0].strip()
+    text = re.sub(r"\([^)]*\)", "", text).strip()
+    return text.strip(" .;,-–—")
+
 
 def parse_freedict() -> dict[str, str]:
-    """Parse FreeDict TEI letters into en -> first Polish gloss."""
     mapping: dict[str, str] = {}
+    if not LETTERS_DIR.exists():
+        print("WARNING: FreeDict TEI not found at", LETTERS_DIR)
+        return mapping
     for path in sorted(LETTERS_DIR.glob("*.xml")):
-        tree = ET.parse(path)
-        root = tree.getroot()
+        root = ET.parse(path).getroot()
         for entry in root.findall(".//tei:entry", NS):
             orth = entry.find("./tei:form/tei:orth", NS)
             if orth is None or not orth.text:
                 continue
             en = orth.text.strip().lower()
-            if not en or not re.fullmatch(r"[a-z][a-z'-]*", en):
+            if not re.fullmatch(r"[a-z][a-z'-]*", en):
                 continue
             quotes = [
                 q.text.strip()
@@ -206,121 +518,243 @@ def parse_freedict() -> dict[str, str]:
     return mapping
 
 
-def clean_polish(text: str) -> str:
-    text = text.strip()
-    text = re.sub(r"\s+", " ", text)
-    # Take first alternative if slash-separated
-    text = text.split("/")[0].strip()
-    text = text.split(";")[0].strip()
-    text = text.split(",")[0].strip()
-    # Drop parenthetical notes
-    text = re.sub(r"\([^)]*\)", "", text).strip()
-    text = text.strip(" .;,-")
-    return text
+def load_person_names() -> set[str]:
+    names: set[str] = set()
+    if nltk_names is not None:
+        for filename in ("male.txt", "female.txt"):
+            try:
+                names.update(n.lower() for n in nltk_names.words(filename))
+            except LookupError:
+                import nltk as _nltk
+
+                _nltk.download("names", quiet=True)
+                names.update(n.lower() for n in nltk_names.words(filename))
+    names.update(
+        {
+            "thomas", "john", "paul", "mary", "michael", "george", "william",
+            "robert", "richard", "joe", "david", "james", "peter", "anna",
+            "sarah", "jennifer", "elizabeth", "susan", "jessica", "daniel",
+            "matthew", "anthony", "donald", "steven", "andrew", "joshua",
+            "kenneth", "kevin", "brian", "edward", "ronald", "timothy", "jason",
+            "jeffrey", "ryan", "jacob", "gary", "nicholas", "eric", "jonathan",
+            "stephen", "larry", "justin", "brandon", "benjamin", "samuel",
+            "gregory", "alexander", "raymond", "patrick", "dennis", "jerry",
+            "tyler", "aaron", "jose", "adam", "nathan", "henry", "douglas",
+            "zachary", "kyle", "noah", "ethan", "jeremy", "walter", "keith",
+            "roger", "terry", "austin", "sean", "gerald", "carl", "harold",
+            "dylan", "arthur", "lawrence", "jesse", "bryan", "bruce", "gabriel",
+            "logan", "albert", "willie", "alan", "ralph", "roy", "tom", "tommy",
+            "tony", "mike", "bobby", "jimmy", "tim", "dan", "danny", "steve",
+            "dave", "alex", "ben", "nick", "matt", "katie", "kate", "kathy",
+            "nancy", "betty", "helen", "sandra", "donna", "carol", "ruth",
+            "sharon", "michelle", "laura", "emily", "kimberly", "deborah",
+            "stephanie", "rebecca", "virginia", "catherine", "christine", "max",
+            "leo", "lucy", "lily", "sophie", "olivia", "emma", "chloe", "mia",
+            "harry", "oscar", "charlie", "louis", "lucas",
+        }
+    )
+    return names - NAME_ALLOWLIST
 
 
-def clean_google_pl(text: str) -> str:
-    text = clean_polish(text)
-    # Prefer shorter lemma-like forms; strip trailing inflection markers if multiword noise
-    return text
+def is_probable_english_plural(word: str) -> bool:
+    if word in IRREGULAR_SINGULAR:
+        return True
+    if len(word) < 4 or not word.endswith("s"):
+        return False
+    if word.endswith(("ss", "us", "is", "ous", "ics", "itis", "esis", "osis", "ness", "less")):
+        return False
+    return True
 
 
-MANUAL_OVERRIDES: dict[str, str] = {
-    "the": "ten/ta/to",
-    "a": "jakiś",
-    "an": "jakiś",
-    "to": "do",
-    "and": "i",
-    "of": "z",
-    "in": "w",
-    "is": "jest",
-    "for": "dla",
-    "that": "że",
-    "you": "ty",
-    "it": "to",
-    "on": "na",
-    "with": "z",
-    "this": "to",
-    "was": "był",
-    "be": "być",
-    "as": "jako",
-    "are": "są",
-    "have": "mieć",
-    "or": "lub",
-    "at": "przy",
-    "from": "od",
-    "by": "przez",
-    "not": "nie",
-    "your": "twój",
-    "all": "wszystko",
-    "can": "móc",
-    "will": "będzie",
-    "just": "właśnie",
-    "but": "ale",
-    "what": "co",
-    "when": "kiedy",
-    "who": "kto",
-    "which": "który",
-    "their": "ich",
-    "there": "tam",
-    "here": "tutaj",
-    "they": "oni",
-    "we": "my",
-    "he": "on",
-    "she": "ona",
-    "his": "jego",
-    "her": "jej",
-    "my": "mój",
-    "me": "mnie",
-    "him": "jego",
-    "us": "nas",
-    "them": "ich",
-    "our": "nasz",
-    "if": "jeśli",
-    "so": "więc",
-    "than": "niż",
-    "then": "potem",
-    "also": "także",
-    "more": "więcej",
-    "most": "najbardziej",
-    "some": "trochę",
-    "any": "jakikolwiek",
-    "no": "nie",
-    "yes": "tak",
-    "do": "robić",
-    "does": "robi",
-    "did": "zrobił",
-    "done": "zrobione",
-    "has": "ma",
-    "had": "miał",
-    "would": "by",
-    "could": "mógłby",
-    "should": "powinien",
-    "may": "może",
-    "might": "mógłby",
-    "must": "musić",
-    "about": "o",
-    "into": "do",
-    "over": "nad",
-    "after": "po",
-    "before": "przed",
-    "between": "między",
-    "under": "pod",
-    "again": "znowu",
-    "because": "ponieważ",
-    "through": "przez",
-    "during": "podczas",
-    "without": "bez",
-    "against": "przeciw",
-    "among": "wśród",
-    "across": "przez",
-    "laptop": "laptop",
-    "keyboard": "klawiatura",
-    "mouse": "mysz",
-    "speakers": "głośniki",
-    "phone": "telefon",
-    "computer": "komputer",
-}
+def english_singular(word: str) -> str | None:
+    if word in IRREGULAR_SINGULAR:
+        return IRREGULAR_SINGULAR[word]
+    if not is_probable_english_plural(word):
+        return None
+    if word.endswith("ies") and len(word) > 4:
+        return word[:-3] + "y"
+    if word.endswith(("ches", "shes", "xes", "sses", "zes")) and len(word) > 4:
+        return word[:-2]
+    if word.endswith("ves") and len(word) > 4:
+        stem = word[:-3]
+        return stem + ("fe" if stem.endswith("i") else "f")
+    if word.endswith("es") and len(word) > 4 and word[-3] in "sxz":
+        return word[:-2]
+    if word.endswith("s"):
+        return word[:-1]
+    return None
+
+
+def polish_plural_from_singular(singular: str) -> str | None:
+    s = singular.strip().lower()
+    if not s or " " in s or "/" in s:
+        return None
+    irregular = {
+        "pies": "psy",
+        "kot": "koty",
+        "kaczka": "kaczki",
+        "książka": "książki",
+        "dziecko": "dzieci",
+        "mężczyzna": "mężczyźni",
+        "kobieta": "kobiety",
+        "osoba": "osoby",
+        "człowiek": "ludzie",
+        "mysz": "myszy",
+        "stopa": "stopy",
+        "ząb": "zęby",
+        "liść": "liście",
+        "nóż": "noże",
+        "żona": "żony",
+        "oko": "oczy",
+        "ucho": "uszy",
+        "ręka": "ręce",
+        "brat": "bracia",
+        "przyjaciel": "przyjaciele",
+        "dom": "domy",
+        "samochód": "samochody",
+        "ptak": "ptaki",
+        "kwiat": "kwiaty",
+        "stół": "stoły",
+        "koń": "konie",
+        "dzień": "dni",
+    }
+    if s in irregular:
+        return irregular[s]
+    if s.endswith("ka"):
+        return s[:-2] + "ki"
+    if s.endswith("ga"):
+        return s[:-2] + "gi"
+    if s.endswith("a"):
+        return s[:-1] + "y"
+    if s.endswith("ek"):
+        return s[:-2] + "ki"
+    if s.endswith("ec"):
+        return s[:-2] + "ce"
+    if s.endswith(("ć", "ś", "ź", "ń", "j", "l")):
+        return s + "e"
+    if re.search(r"[bdfghklmnprstwz]$", s) or s.endswith("ch"):
+        return s + "y"
+    return None
+
+
+def normalize_ascii_fold(text: str) -> str:
+    repl = str.maketrans(
+        {
+            "ą": "a", "ć": "c", "ę": "e", "ł": "l", "ń": "n", "ó": "o",
+            "ś": "s", "ź": "z", "ż": "z",
+        }
+    )
+    return text.translate(repl).lower()
+
+
+def is_useless_identity(en: str, pl: str) -> bool:
+    if not pl:
+        return True
+    en_n = normalize_ascii_fold(en)
+    pl_n = normalize_ascii_fold(pl.split("/")[0].split()[0])
+    if en_n != pl_n:
+        return False
+    return en.lower() not in LOANWORDS_OK
+
+
+def translate_argos(en: str) -> str | None:
+    import argostranslate.translate
+
+    try:
+        pl = argostranslate.translate.translate(en, "en", "pl")
+    except Exception:  # noqa: BLE001
+        return None
+    return clean_polish(pl) if pl else None
+
+
+def morph_lookup(word: str, mapping: dict[str, str]) -> str | None:
+    if word in mapping:
+        return mapping[word]
+    if word.endswith("ies") and len(word) > 4:
+        cand = word[:-3] + "y"
+        if cand in mapping:
+            return mapping[cand]
+    for suffix in ("ing", "ed", "es", "s", "ly", "tion", "ment", "ness", "er", "est"):
+        if word.endswith(suffix) and len(word) > len(suffix) + 2:
+            stem = word[: -len(suffix)]
+            for cand in (stem, stem + "e"):
+                if cand in mapping:
+                    return mapping[cand]
+            if stem.endswith("i"):
+                cand = stem[:-1] + "y"
+                if cand in mapping:
+                    return mapping[cand]
+    return None
+
+
+def translate_word(en: str, freedict: dict[str, str], cache: dict[str, str]) -> str | None:
+    if en in cache:
+        return cache[en]
+    if en in MANUAL:
+        cache[en] = MANUAL[en]
+        return cache[en]
+
+    if is_probable_english_plural(en):
+        singular = english_singular(en)
+        if singular:
+            sing_pl = translate_word(singular, freedict, cache)
+            if sing_pl:
+                base = clean_polish(sing_pl.split("/")[0])
+                plural = polish_plural_from_singular(base)
+                if plural and plural != base:
+                    cache[en] = plural
+                    return cache[en]
+            arg = translate_argos(en)
+            if arg and not is_useless_identity(en, arg):
+                if singular:
+                    sing_pl2 = cache.get(singular)
+                    if sing_pl2 and clean_polish(arg) == clean_polish(sing_pl2.split("/")[0]):
+                        forced = polish_plural_from_singular(clean_polish(sing_pl2.split("/")[0]))
+                        if forced:
+                            cache[en] = forced
+                            return cache[en]
+                cache[en] = arg
+                return cache[en]
+
+    if en in freedict:
+        pl = clean_polish(freedict[en])
+        if pl and not is_useless_identity(en, pl):
+            cache[en] = pl
+            return cache[en]
+
+    hit = morph_lookup(en, freedict)
+    if hit:
+        pl = clean_polish(hit)
+        if pl and not is_useless_identity(en, pl):
+            if not (is_probable_english_plural(en) and polish_plural_from_singular(pl) and pl == clean_polish(hit)):
+                # If this is plural and morph returned singular gloss, pluralize it
+                if is_probable_english_plural(en):
+                    forced = polish_plural_from_singular(pl)
+                    if forced and forced != pl:
+                        cache[en] = forced
+                        return cache[en]
+                else:
+                    cache[en] = pl
+                    return cache[en]
+
+    arg = translate_argos(en)
+    if arg and not is_useless_identity(en, arg):
+        cache[en] = arg
+        return cache[en]
+    return None
+
+
+def should_skip_token(en: str, person_names: set[str], freedict: dict[str, str]) -> bool:
+    if en in BLOCKLIST:
+        return True
+    if not re.fullmatch(r"[a-z]+", en):
+        return True
+    if len(en) == 1 and en not in {"a", "i"}:
+        return True
+    # Drop person names only when they have no real dictionary sense.
+    if en in person_names and en not in NAME_ALLOWLIST and en not in MANUAL and en not in freedict:
+        return True
+    return False
 
 
 def build_bucket_index() -> dict[str, str]:
@@ -334,7 +768,9 @@ def build_bucket_index() -> dict[str, str]:
 def assign_bucket(word: str, bucket_index: dict[str, str], rank: int) -> str:
     if word in bucket_index:
         return bucket_index[word]
-    # Simple morphology: strip common endings and retry
+    singular = english_singular(word)
+    if singular and singular in bucket_index:
+        return bucket_index[singular]
     for suffix in ("ing", "ed", "es", "s", "ly", "tion", "ment", "ness"):
         if word.endswith(suffix) and len(word) > len(suffix) + 2:
             stem = word[: -len(suffix)]
@@ -342,120 +778,107 @@ def assign_bucket(word: str, bucket_index: dict[str, str], rank: int) -> str:
                 return bucket_index[stem]
             if stem + "e" in bucket_index:
                 return bucket_index[stem + "e"]
-    # Frequency bands keep distractors at similar commonness
-    band = rank // 250
-    return f"freq_{band:02d}"
+    return f"freq_{rank // 250:02d}"
 
 
-def morph_lookup(word: str, mapping: dict[str, str]) -> str | None:
-    if word in mapping:
-        return mapping[word]
-    if word.endswith("ies") and len(word) > 4:
-        cand = word[:-3] + "y"
-        if cand in mapping:
-            return mapping[cand]
-    for suffix in ("ing", "ed", "es", "s", "ly", "tion", "ment", "ness", "er", "est", "ers"):
-        if word.endswith(suffix) and len(word) > len(suffix) + 2:
-            stem = word[: -len(suffix)]
-            for cand in (stem, stem + "e"):
-                if cand in mapping:
-                    return mapping[cand]
-            if stem.endswith("i"):
-                cand = stem[:-1] + "y"
-                if cand in mapping:
-                    return mapping[cand]
-    return None
-
-
-def translate_missing(words: list[str], known: dict[str, str]) -> dict[str, str]:
-    missing = [w for w in words if w not in known]
-    if not missing:
-        return {}
-
-    import argostranslate.translate
-
-    filled: dict[str, str] = {}
-    print(f"Translating {len(missing)} missing words via Argos (offline)...")
-    for i, en in enumerate(missing, start=1):
-        try:
-            pl = argostranslate.translate.translate(en, "en", "pl")
-            if pl:
-                filled[en] = clean_google_pl(pl)
-        except Exception as exc:  # noqa: BLE001
-            print(f"  failed: {en}: {exc}")
-        if i % 200 == 0 or i == len(missing):
-            print(f"  {i}/{len(missing)}", flush=True)
-    return filled
-
-
-def select_english_words(n: int = 10000) -> list[str]:
-    raw = top_n_list("en", n * 2)
-    words: list[str] = []
+def candidate_english(limit: int = 35000) -> list[str]:
+    raw = top_n_list("en", limit)
+    out: list[str] = []
     seen: set[str] = set()
     for w in raw:
         w = w.lower()
-        if not re.fullmatch(r"[a-z]+", w):
-            continue
-        if len(w) < 2 and w not in {"a", "i"}:
-            continue
-        if w in seen:
+        if w in seen or not re.fullmatch(r"[a-z]+", w):
             continue
         seen.add(w)
-        words.append(w)
-        if len(words) >= n:
-            break
-    if len(words) < n:
-        raise SystemExit(f"Only collected {len(words)} words, need {n}")
-    return words
+        out.append(w)
+    return out
 
 
 def main() -> None:
-    print("Selecting top English words...")
-    english = select_english_words(10000)
-    print(f"  {len(english)} words")
-
-    print("Parsing FreeDict EN→PL...")
+    print("Loading filters & dictionaries...", flush=True)
+    person_names = load_person_names()
+    print(f"  person-name filter: {len(person_names)}", flush=True)
     freedict = parse_freedict()
-    print(f"  {len(freedict)} dictionary entries")
+    print(f"  FreeDict entries: {len(freedict)}", flush=True)
 
-    english_set = set(english)
-    translations: dict[str, str] = {}
-    translations.update({k: clean_polish(v) for k, v in freedict.items() if k in english_set})
-    translations.update({k: v for k, v in MANUAL_OVERRIDES.items() if k in english_set})
-
-    # Morphology fallback from FreeDict before machine translation
-    for w in english:
-        if w not in translations:
-            hit = morph_lookup(w, freedict)
-            if hit:
-                translations[w] = clean_polish(hit)
-
-    print(f"  coverage before MT: {len(translations)}/{len(english)}", flush=True)
-    mt = translate_missing(english, translations)
-    translations.update(mt)
-
-    still_missing = [w for w in english if w not in translations or not translations[w]]
-    if still_missing:
-        print(f"WARNING: {len(still_missing)} words still missing translations")
-        for w in still_missing:
-            translations[w] = w  # last-resort identity; better than dropping
+    # Fix known bad/odd FreeDict head glosses for everyday senses
+    freedict.update(
+        {
+            "house": "dom",
+            "home": "dom",
+            "love": "miłość / kochać",
+            "rock": "skała / rock",
+            "bear": "niedźwiedź / znosić",
+            "fan": "wentylator / kibic",
+            "miss": "tęsknić / panna / chybiać",
+            "lie": "kłamać / leżeć",
+            "light": "światło / lekki",
+            "present": "obecny / prezent",
+            "letter": "list / litera",
+            "match": "mecz / zapałka / pasować",
+            "park": "park / parkować",
+        }
+    )
 
     bucket_index = build_bucket_index()
-    records = []
-    for rank, en in enumerate(english):
-        pl = translations[en]
-        bucket = assign_bucket(en, bucket_index, rank)
+    cache: dict[str, str] = {}
+    records: list[dict] = []
+    skipped = {"name": 0, "block": 0, "bad_translation": 0, "identity": 0}
+
+    print("Selecting & translating vocabulary...", flush=True)
+    for en in candidate_english():
+        if len(records) >= 10000:
+            break
+        if should_skip_token(en, person_names, freedict):
+            if en in person_names and en not in freedict:
+                skipped["name"] += 1
+            else:
+                skipped["block"] += 1
+            continue
+
+        pl = translate_word(en, freedict, cache)
+        if not pl:
+            skipped["bad_translation"] += 1
+            continue
+        if is_useless_identity(en, pl):
+            skipped["identity"] += 1
+            continue
+
+        # Extra guard: person-name with near-identical translation
+        if en in person_names and en not in NAME_ALLOWLIST and en not in MANUAL:
+            if normalize_ascii_fold(pl.split("/")[0].split()[0]) == normalize_ascii_fold(en):
+                skipped["name"] += 1
+                continue
+
+        if is_probable_english_plural(en):
+            singular = english_singular(en)
+            if singular and singular in cache:
+                sing_pl = clean_polish(cache[singular].split("/")[0])
+                pl_base = clean_polish(pl.split("/")[0])
+                if pl_base == sing_pl:
+                    forced = polish_plural_from_singular(sing_pl)
+                    if forced and forced != sing_pl:
+                        pl = forced
+                    else:
+                        skipped["bad_translation"] += 1
+                        continue
+
+        rank = len(records) + 1
         records.append(
             {
-                "id": rank + 1,
+                "id": rank,
                 "en": en,
                 "pl": pl,
-                "rank": rank + 1,
-                "bucket": bucket,
+                "rank": rank,
+                "bucket": assign_bucket(en, bucket_index, rank - 1),
             }
         )
+        if rank % 500 == 0:
+            print(f"  kept {rank}/10000 (skipped {sum(skipped.values())})", flush=True)
 
-    # Ensure every bucket used for play has at least 8 members by merging tiny ones
+    if len(records) < 10000:
+        raise SystemExit(f"Only collected {len(records)} clean words; need 10000")
+
     by_bucket: dict[str, list[dict]] = defaultdict(list)
     for rec in records:
         by_bucket[rec["bucket"]].append(rec)
@@ -466,7 +889,6 @@ def main() -> None:
             overflow.extend(items)
             del by_bucket[bucket]
 
-    # Redistribute overflow into nearest freq buckets / general
     general_idx = 0
     for rec in overflow:
         placed = False
@@ -487,19 +909,38 @@ def main() -> None:
             rec["bucket"] = name
             by_bucket[name].append(rec)
 
-    OUT_PATH.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "meta": {
             "count": len(records),
-            "source_frequency": "wordfreq top English",
-            "source_translations": "FreeDict eng-pol + Argos Translate fallback",
+            "source_frequency": "wordfreq top English (filtered)",
+            "source_translations": "FreeDict eng-pol + Argos + manual number fixes",
             "languages": ["en", "pl"],
+            "filters": [
+                "person_names_without_dictionary_sense",
+                "blocklist_slang_urls_brands",
+                "reject_useless_identity_pairs",
+                "plural_number_agreement",
+            ],
         },
         "words": records,
     }
-    OUT_PATH.write_text(json.dumps(payload, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
-    print(f"Wrote {len(records)} words -> {OUT_PATH}")
-    print(f"Buckets: {len(by_bucket)} (min size {min(len(v) for v in by_bucket.values())})")
+    OUT_PATH.parent.mkdir(parents=True, exist_ok=True)
+    OUT_PATH.write_text(
+        json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
+        encoding="utf-8",
+    )
+    print(f"Wrote {len(records)} words -> {OUT_PATH}", flush=True)
+    print(f"Skipped: {skipped}", flush=True)
+    print(
+        f"Buckets: {len(by_bucket)} (min size {min(len(v) for v in by_bucket.values())})",
+        flush=True,
+    )
+    for probe in (
+        "duck", "ducks", "cat", "cats", "dog", "dogs", "book", "books",
+        "thomas", "john", "house", "love", "see", "happy", "take", "created",
+    ):
+        hit = next((r for r in records if r["en"] == probe), None)
+        print(f"  {probe}: {hit}", flush=True)
 
 
 if __name__ == "__main__":
